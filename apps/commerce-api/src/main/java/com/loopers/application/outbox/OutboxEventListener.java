@@ -3,6 +3,7 @@ package com.loopers.application.outbox;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loopers.confg.kafka.KafkaTopics;
+import com.loopers.domain.coupon.event.CouponIssueRequestedEvent;
 import com.loopers.domain.like.event.ProductLikedEvent;
 import com.loopers.domain.like.event.ProductUnlikedEvent;
 import com.loopers.domain.outbox.OutboxEventModel;
@@ -54,6 +55,14 @@ public class OutboxEventListener {
         String eventId = UUID.randomUUID().toString();
         OrderEventPayload payload = new OrderEventPayload(eventId, OrderEventPayload.ORDER_PAID, event.orderId(), event.userId(), items);
         save(eventId, KafkaTopics.ORDER_EVENTS, event.orderId().toString(), payload);
+    }
+
+    @EventListener
+    public void on(CouponIssueRequestedEvent event) {
+        String eventId = UUID.randomUUID().toString();
+        CouponIssueRequestPayload payload = new CouponIssueRequestPayload(
+            eventId, CouponIssueRequestPayload.ISSUE_REQUESTED, event.requestId(), event.userId(), event.couponId());
+        save(eventId, KafkaTopics.COUPON_ISSUE_REQUESTS, event.couponId().toString(), payload);
     }
 
     private void saveCatalogEvent(Long messageKey, String eventType, Long userId, Long productId) {

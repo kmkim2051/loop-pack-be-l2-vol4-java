@@ -2,6 +2,7 @@ package com.loopers.application.outbox;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.loopers.confg.kafka.KafkaTopics;
+import com.loopers.domain.coupon.event.CouponIssueRequestedEvent;
 import com.loopers.domain.like.event.ProductLikedEvent;
 import com.loopers.domain.like.event.ProductUnlikedEvent;
 import com.loopers.domain.outbox.OutboxEventModel;
@@ -36,6 +37,8 @@ class OutboxEventListenerTest {
     private static final Long PRODUCT_ID = 10L;
     private static final Long PAYMENT_ID = 100L;
     private static final Long ORDER_ID = 1000L;
+    private static final Long REQUEST_ID = 10000L;
+    private static final Long COUPON_ID = 5L;
 
     @BeforeEach
     void setUp() {
@@ -152,6 +155,32 @@ class OutboxEventListenerTest {
                 .contains("\"orderId\":" + ORDER_ID)
                 .contains("\"productId\":" + PRODUCT_ID + ",\"quantity\":2")
                 .contains("\"productId\":" + (PRODUCT_ID + 1) + ",\"quantity\":1");
+        }
+    }
+
+    @DisplayName("CouponIssueRequestedEvent 수신 시,")
+    @Nested
+    class OnCouponIssueRequested {
+
+        @DisplayName("coupon-issue-requests 토픽, couponId를 key로 하는 outbox 레코드가 저장된다.")
+        @Test
+        void savesOutboxEvent_withCouponIssueRequestsTopic() {
+            // arrange
+            ArgumentCaptor<OutboxEventModel> captor = ArgumentCaptor.forClass(OutboxEventModel.class);
+            given(outboxEventRepository.save(captor.capture())).willReturn(null);
+
+            // act
+            listener.on(new CouponIssueRequestedEvent(REQUEST_ID, USER_ID, COUPON_ID));
+
+            // assert
+            OutboxEventModel saved = captor.getValue();
+            assertThat(saved.getTopic()).isEqualTo(KafkaTopics.COUPON_ISSUE_REQUESTS);
+            assertThat(saved.getMessageKey()).isEqualTo(COUPON_ID.toString());
+            assertThat(saved.getPayload())
+                .contains("\"eventType\":\"ISSUE_REQUESTED\"")
+                .contains("\"requestId\":" + REQUEST_ID)
+                .contains("\"userId\":" + USER_ID)
+                .contains("\"couponId\":" + COUPON_ID);
         }
     }
 }
