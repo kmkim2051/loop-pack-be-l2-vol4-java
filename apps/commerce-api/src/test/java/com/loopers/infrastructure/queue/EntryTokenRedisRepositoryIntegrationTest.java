@@ -12,7 +12,8 @@ import java.time.Duration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-@SpringBootTest
+// 대기열 테스트들과 같은 컨텍스트를 공유하도록 동일 프로퍼티 사용 (이 테스트 자체는 스케줄러 영향 없음)
+@SpringBootTest(properties = "queue.scheduler.enabled=false")
 class EntryTokenRedisRepositoryIntegrationTest {
 
     @Autowired private EntryTokenRedisRepository entryTokenRepository;

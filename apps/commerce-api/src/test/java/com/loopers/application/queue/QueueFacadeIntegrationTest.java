@@ -18,7 +18,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
-@SpringBootTest
+// 백그라운드 스케줄러가 3초마다 대기열을 pop하면 순번 검증이 비결정적이 되므로 비활성화
+@SpringBootTest(properties = "queue.scheduler.enabled=false")
 class QueueFacadeIntegrationTest {
 
     @Autowired private QueueFacade queueFacade;
