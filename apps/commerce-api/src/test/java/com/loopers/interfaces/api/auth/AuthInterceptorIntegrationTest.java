@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.cloud.client.circuitbreaker.CircuitBreaker;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
@@ -34,6 +35,9 @@ class AuthInterceptorIntegrationTest {
 
     @MockitoBean
     private EntryTokenRepository entryTokenRepository;
+
+    @MockitoBean
+    private CircuitBreaker entryTokenCircuitBreaker;
 
     @DisplayName("GET /api/v1/users/me 요청 시,")
     @Nested
