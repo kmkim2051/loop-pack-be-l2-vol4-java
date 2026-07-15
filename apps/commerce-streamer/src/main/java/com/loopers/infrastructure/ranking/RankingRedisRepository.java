@@ -1,13 +1,17 @@
 package com.loopers.infrastructure.ranking;
 
 import com.loopers.config.redis.RedisConfig;
+import com.loopers.domain.ranking.RankingEntry;
 import com.loopers.domain.ranking.RankingKey;
 import com.loopers.domain.ranking.RankingRepository;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDate;
+import java.util.List;
+import java.util.Set;
 
 /**
  * Redis Sorted Set 기반 랭킹 저장소 — ZINCRBY로 점수를 누적한다.
@@ -18,6 +22,9 @@ import java.time.LocalDate;
 public class RankingRedisRepository implements RankingRepository {
 
     private static final long TTL_NOT_SET = -1L;
+
+    /** "양수 점수" 필터의 하한 — 논리적 최소 양수 점수(조회 0.1)와 부동소수점 잔여 오차 사이 값 (commerce-api 조회 측과 동일 기준). */
+    private static final double MIN_POSITIVE_SCORE = 1e-7;
 
     private final RedisTemplate<String, String> redisTemplate;
 
@@ -31,6 +38,25 @@ public class RankingRedisRepository implements RankingRepository {
     public void incrementScore(LocalDate date, Long productId, double scoreDelta) {
         String key = RankingKey.daily(date);
         redisTemplate.opsForZSet().incrementScore(key, String.valueOf(productId), scoreDelta);
+        setTtlOnCreation(key);
+    }
+
+    @Override
+    public List<RankingEntry> findTopEntries(LocalDate date, int limit) {
+        Set<ZSetOperations.TypedTuple<String>> tuples = redisTemplate.opsForZSet()
+            .reverseRangeByScoreWithScores(RankingKey.daily(date), MIN_POSITIVE_SCORE, Double.POSITIVE_INFINITY, 0, limit);
+        if (tuples == null) {
+            return List.of();
+        }
+        return tuples.stream()
+            .map(tuple -> new RankingEntry(Long.valueOf(tuple.getValue()), tuple.getScore()))
+            .toList();
+    }
+
+    @Override
+    public void saveScoreIfAbsent(LocalDate date, Long productId, double score) {
+        String key = RankingKey.daily(date);
+        redisTemplate.opsForZSet().addIfAbsent(key, String.valueOf(productId), score);
         setTtlOnCreation(key);
     }
 

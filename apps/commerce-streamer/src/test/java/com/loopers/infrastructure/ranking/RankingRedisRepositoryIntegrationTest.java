@@ -1,6 +1,7 @@
 package com.loopers.infrastructure.ranking;
 
 import com.loopers.config.redis.RedisConfig;
+import com.loopers.domain.ranking.RankingEntry;
 import com.loopers.utils.RedisCleanUp;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
@@ -12,6 +13,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.redis.core.RedisTemplate;
 
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
@@ -128,6 +130,70 @@ class RankingRedisRepositoryIntegrationTest {
             // assert — TTL이 처음 설정값을 넘어 다시 늘어나지 않는다
             Long secondExpire = redisTemplate.getExpire(KEY, TimeUnit.SECONDS);
             assertThat(secondExpire).isLessThanOrEqualTo(firstExpire);
+        }
+    }
+
+    @DisplayName("Carry-Over 지원 연산 —")
+    @Nested
+    class CarryOver {
+
+        @DisplayName("findTopEntries()는 양수 점수 항목만 점수 내림차순으로 limit개 반환한다 (0점·음수 제외).")
+        @Test
+        void findsTopPositiveEntries_inDescendingOrder() {
+            // arrange
+            redisTemplate.opsForZSet().add(KEY, "1", 6_000.0);
+            redisTemplate.opsForZSet().add(KEY, "2", 0.6);
+            redisTemplate.opsForZSet().add(KEY, "3", 0.1);
+            redisTemplate.opsForZSet().add(KEY, "4", 0.0);
+            redisTemplate.opsForZSet().add(KEY, "5", -0.2);
+
+            // act
+            List<RankingEntry> result = rankingRedisRepository.findTopEntries(DATE, 2);
+
+            // assert
+            assertThat(result).containsExactly(
+                new RankingEntry(1L, 6_000.0),
+                new RankingEntry(2L, 0.6)
+            );
+        }
+
+        @DisplayName("saveScoreIfAbsent()는 이미 점수가 있는 상품을 덮어쓰지 않는다 — 스케줄러 중복 실행에 안전.")
+        @Test
+        void doesNotOverwriteExistingScore() {
+            // arrange
+            rankingRedisRepository.saveScoreIfAbsent(DATE, PRODUCT_ID, 3_000.0);
+
+            // act — 중복 실행 재현
+            rankingRedisRepository.saveScoreIfAbsent(DATE, PRODUCT_ID, 999.0);
+
+            // assert
+            assertThat(redisTemplate.opsForZSet().score(KEY, String.valueOf(PRODUCT_ID)))
+                .isCloseTo(3_000.0, within(1e-6));
+        }
+
+        @DisplayName("saveScoreIfAbsent()로 키가 생성되면 TTL 2일이 설정된다.")
+        @Test
+        void setsTtl_whenKeyIsCreatedByCarryOver() {
+            // act
+            rankingRedisRepository.saveScoreIfAbsent(DATE, PRODUCT_ID, 3_000.0);
+
+            // assert
+            Long expireSeconds = redisTemplate.getExpire(KEY, TimeUnit.SECONDS);
+            assertThat(expireSeconds).isBetween(172_800L - 60, 172_800L);
+        }
+
+        @DisplayName("이월된 점수 위에 자정 이후 실제 이벤트 점수가 누적된다.")
+        @Test
+        void accumulatesRealEventsOnTopOfCarriedScore() {
+            // arrange — 이월 점수 기록
+            rankingRedisRepository.saveScoreIfAbsent(DATE, PRODUCT_ID, 3_000.0);
+
+            // act — 자정 이후 조회 이벤트 재현
+            rankingRedisRepository.incrementScore(DATE, PRODUCT_ID, 0.1);
+
+            // assert
+            assertThat(redisTemplate.opsForZSet().score(KEY, String.valueOf(PRODUCT_ID)))
+                .isCloseTo(3_000.1, within(1e-6));
         }
     }
 }
