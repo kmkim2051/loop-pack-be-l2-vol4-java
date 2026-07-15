@@ -35,7 +35,7 @@ class RankingCarryOverSchedulerTest {
         scheduler = new RankingCarryOverScheduler(rankingRepository);
     }
 
-    @DisplayName("오늘 랭킹 상위 항목이 감쇠 계수(0.5)를 곱한 점수로 내일 키에 이월된다.")
+    @DisplayName("오늘 랭킹 상위 항목이 감쇠 계수(0.3)를 곱한 점수로 내일 키에 이월된다.")
     @Test
     void carriesOverTopEntries_withDecayedScore() {
         // arrange
@@ -47,9 +47,9 @@ class RankingCarryOverSchedulerTest {
         // act
         scheduler.carryOver();
 
-        // assert
-        then(rankingRepository).should().saveScoreIfAbsent(tomorrow, 1L, 3_000.0);
-        then(rankingRepository).should().saveScoreIfAbsent(tomorrow, 2L, 0.3);
+        // assert — 6000 × 0.3 = 1800, 0.6 × 0.3 = 0.18
+        then(rankingRepository).should().saveScoreIfAbsent(tomorrow, 1L, 1_800.0);
+        then(rankingRepository).should().saveScoreIfAbsent(tomorrow, 2L, 0.6 * 0.3);
     }
 
     @DisplayName("오늘 랭킹판이 비어 있으면 이월하지 않는다.")

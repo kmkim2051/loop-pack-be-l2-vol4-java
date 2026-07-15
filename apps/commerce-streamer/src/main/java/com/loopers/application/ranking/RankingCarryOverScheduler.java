@@ -26,10 +26,11 @@ import java.util.List;
 public class RankingCarryOverScheduler {
 
     /**
-     * 감쇠 계수 0.5 — 이월 점수가 다음 날 실제 이벤트와 하루 종일 경쟁하지 않도록 절반만 이월한다.
-     * 이월 범위 100 — 랭킹 API의 페이지 size 상한(100)과 일치. 둘 다 가정치 기반 초안으로, 운영 관찰 후 조정한다.
+     * 감쇠 계수 0.3 — 이월 계수 1.0이어야 전날:오늘이 반반으로 반영되는 구조이므로,
+     * 0.5도 전날 비중이 과하다는 판단(개발자 확정, 2026-07-15)에 따라 0.3으로 조정.
+     * 이월 범위 100 — 랭킹 API의 페이지 size 상한(100)과 일치. 운영 관찰 후 조정한다.
      */
-    static final double DECAY_FACTOR = 0.5;
+    static final double DECAY_FACTOR = 0.3;
     static final int CARRY_OVER_LIMIT = 100;
 
     private final RankingRepository rankingRepository;
