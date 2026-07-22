@@ -17,7 +17,6 @@ import org.springframework.batch.core.job.builder.JobBuilder;
 import org.springframework.batch.core.launch.support.RunIdIncrementer;
 import org.springframework.batch.core.repository.JobRepository;
 import org.springframework.batch.core.step.builder.StepBuilder;
-import org.springframework.batch.item.ItemProcessor;
 import org.springframework.batch.item.database.JdbcCursorItemReader;
 import org.springframework.batch.item.database.JpaItemWriter;
 import org.springframework.batch.item.database.builder.JdbcCursorItemReaderBuilder;
@@ -32,7 +31,6 @@ import org.springframework.transaction.PlatformTransactionManager;
 import javax.sql.DataSource;
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
-import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * 주간·월간 랭킹 집계 Job — 일간 롤업(product_metrics_daily)을 기간 집계해 MV 두 테이블에 TOP 100을 적재한다.
@@ -52,9 +50,15 @@ public class ProductRankAggregationJobConfig {
 
     private static final int WEEKLY_DAYS = 7;
     private static final int MONTHLY_DAYS = 30;
-    private static final int CHUNK_SIZE = RankScorePolicy.TOP_N;
 
-    /** 기간 내 상품별 카운트 합산 + 가중 점수 내림차순 TOP 100. 점수 계수는 {@link RankScorePolicy} 단일 소스. */
+    /** 청크 커밋 인터벌 — TOP_N과 무관하며, 집계된 전체 상품이 이 크기 단위로 처리·커밋된다. */
+    private static final int CHUNK_SIZE = 100;
+
+    /**
+     * 기간 내 상품별 카운트 합산 + 가중 점수 내림차순 정렬 (LIMIT 없음).
+     * TOP N 컷은 SQL이 아니라 청크의 Processor({@link TopNRankProcessor})가 담당해, 집계된 전체 상품이
+     * Reader→Processor 청크 파이프라인을 관통하도록 한다. 점수 계수는 {@link RankScorePolicy} 단일 소스.
+     */
     private static final String AGGREGATE_SQL =
         "SELECT product_id AS productId, "
             + "SUM(view_count) AS viewSum, SUM(like_count) AS likeSum, SUM(sales_count) AS salesSum "
@@ -62,8 +66,7 @@ public class ProductRankAggregationJobConfig {
             + "WHERE metric_date BETWEEN ? AND ? "
             + "GROUP BY product_id "
             + "ORDER BY (" + RankScorePolicy.scoreSql("SUM(view_count)", "SUM(like_count)", "SUM(sales_count)") + ") DESC, "
-            + "product_id ASC "
-            + "LIMIT " + RankScorePolicy.TOP_N;
+            + "product_id ASC";
 
     private final JobRepository jobRepository;
     private final PlatformTransactionManager transactionManager;
@@ -121,18 +124,12 @@ public class ProductRankAggregationJobConfig {
 
     @Bean
     @StepScope
-    public ItemProcessor<ProductMetricsAggregate, WeeklyProductRankModel> weeklyRankProcessor(
+    public TopNRankProcessor<WeeklyProductRankModel> weeklyRankProcessor(
         @Value("#{jobParameters['baseDate']}") String baseDate
     ) {
         LocalDate end = resolveBaseDate(baseDate);
         LocalDate start = end.minusDays(WEEKLY_DAYS - 1);
-        AtomicInteger rank = new AtomicInteger(0);
-        return agg -> new WeeklyProductRankModel(
-            rank.incrementAndGet(),
-            agg.productId(),
-            RankScorePolicy.score(agg.viewSum(), agg.likeSum(), agg.salesSum()),
-            start, end
-        );
+        return new TopNRankProcessor<>(RankScorePolicy.TOP_N, start, end, WeeklyProductRankModel::new);
     }
 
     // ── 월간 ────────────────────────────────────────────────────────────────
@@ -170,18 +167,12 @@ public class ProductRankAggregationJobConfig {
 
     @Bean
     @StepScope
-    public ItemProcessor<ProductMetricsAggregate, MonthlyProductRankModel> monthlyRankProcessor(
+    public TopNRankProcessor<MonthlyProductRankModel> monthlyRankProcessor(
         @Value("#{jobParameters['baseDate']}") String baseDate
     ) {
         LocalDate end = resolveBaseDate(baseDate);
         LocalDate start = end.minusDays(MONTHLY_DAYS - 1);
-        AtomicInteger rank = new AtomicInteger(0);
-        return agg -> new MonthlyProductRankModel(
-            rank.incrementAndGet(),
-            agg.productId(),
-            RankScorePolicy.score(agg.viewSum(), agg.likeSum(), agg.salesSum()),
-            start, end
-        );
+        return new TopNRankProcessor<>(RankScorePolicy.TOP_N, start, end, MonthlyProductRankModel::new);
     }
 
     // ── 공통 ────────────────────────────────────────────────────────────────
