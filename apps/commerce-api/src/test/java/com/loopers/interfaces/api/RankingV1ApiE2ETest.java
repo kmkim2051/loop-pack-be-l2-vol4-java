@@ -25,6 +25,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
@@ -33,6 +34,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.time.LocalDate;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertAll;
@@ -55,6 +57,7 @@ class RankingV1ApiE2ETest {
     @Autowired private PasswordEncoder passwordEncoder;
     @Autowired private DatabaseCleanUp databaseCleanUp;
     @Autowired private RedisCleanUp redisCleanUp;
+    @Autowired private JdbcTemplate jdbcTemplate;
 
     @Autowired
     @Qualifier(RedisConfig.REDIS_TEMPLATE_MASTER)
@@ -86,6 +89,25 @@ class RankingV1ApiE2ETest {
 
     private void addScore(LocalDate date, Long productId, double score) {
         redisTemplate.opsForZSet().add(RankingKey.daily(date), String.valueOf(productId), score);
+    }
+
+    /**
+     * 주간 MV(commerce-batch 소유 테이블)를 테스트에서 직접 만들어 순위 순으로 시드한다.
+     * commerce-api는 이 테이블을 JdbcTemplate으로 읽기만 하므로(엔티티 없음) 테스트가 스키마를 생성한다.
+     */
+    private void seedWeeklyMv(List<Long> productIdsInRankOrder) {
+        jdbcTemplate.execute(
+            "CREATE TABLE IF NOT EXISTS mv_product_rank_weekly ("
+                + "id BIGINT AUTO_INCREMENT PRIMARY KEY, rank_no INT NOT NULL, product_id BIGINT NOT NULL, "
+                + "score DOUBLE, period_start DATE, period_end DATE, created_at DATETIME, updated_at DATETIME)"
+        );
+        jdbcTemplate.update("DELETE FROM mv_product_rank_weekly");
+        for (int i = 0; i < productIdsInRankOrder.size(); i++) {
+            jdbcTemplate.update(
+                "INSERT INTO mv_product_rank_weekly (rank_no, product_id) VALUES (?, ?)",
+                i + 1, productIdsInRankOrder.get(i)
+            );
+        }
     }
 
     private HttpHeaders userAuthHeaders() {
@@ -182,6 +204,80 @@ class RankingV1ApiE2ETest {
             ResponseEntity<ApiResponse<Void>> response = testRestTemplate.exchange(
                 RANKING_ENDPOINT + "?date=2026-07-15",
                 HttpMethod.GET, new HttpEntity<>(userAuthHeaders()), type
+            );
+
+            // assert
+            assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        }
+    }
+
+    @DisplayName("GET /api/v1/rankings?period=WEEKLY/MONTHLY 요청 시,")
+    @Nested
+    class GetRankingsByPeriod {
+
+        @DisplayName("WEEKLY는 MV의 최신 스냅샷을 순위대로 상품정보와 함께 반환하고, date는 응답에 포함되지 않는다.")
+        @Test
+        void returnsWeeklyRankingFromMv() {
+            // arrange — 주간 MV에 순위 1·2로 시드 (일간 ZSET은 비어 있음)
+            ProductModel first = saveProduct("에어맥스", 150_000, 50);
+            ProductModel second = saveProduct("조던", 200_000, 30);
+            seedWeeklyMv(List.of(first.getId(), second.getId()));
+
+            // act
+            ParameterizedTypeReference<ApiResponse<RankingV1Dto.RankingPageResponse>> type =
+                new ParameterizedTypeReference<>() {};
+            ResponseEntity<ApiResponse<RankingV1Dto.RankingPageResponse>> response = testRestTemplate.exchange(
+                RANKING_ENDPOINT + "?period=WEEKLY", HttpMethod.GET, new HttpEntity<>(userAuthHeaders()), type
+            );
+
+            // assert
+            RankingV1Dto.RankingPageResponse body = response.getBody().data();
+            assertAll(
+                () -> assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK),
+                () -> assertThat(body.period()).isEqualTo("WEEKLY"),
+                () -> assertThat(body.date()).isNull(),
+                () -> assertThat(body.totalCount()).isEqualTo(2),
+                () -> assertThat(body.items().get(0).rank()).isEqualTo(1),
+                () -> assertThat(body.items().get(0).productId()).isEqualTo(first.getId()),
+                () -> assertThat(body.items().get(0).name()).isEqualTo("에어맥스"),
+                () -> assertThat(body.items().get(0).brandName()).isEqualTo("Nike"),
+                () -> assertThat(body.items().get(1).rank()).isEqualTo(2),
+                () -> assertThat(body.items().get(1).productId()).isEqualTo(second.getId())
+            );
+        }
+
+        @DisplayName("period 미지정 시 기존과 동일하게 일간(DAILY) 랭킹으로 동작한다 (하위호환).")
+        @Test
+        void defaultsToDaily_whenPeriodOmitted() {
+            // arrange — 일간 ZSET에만 점수 적재
+            ProductModel product = saveProduct("에어맥스", 150_000, 50);
+            addScore(LocalDate.now(), product.getId(), 6_000.0);
+
+            // act
+            ParameterizedTypeReference<ApiResponse<RankingV1Dto.RankingPageResponse>> type =
+                new ParameterizedTypeReference<>() {};
+            ResponseEntity<ApiResponse<RankingV1Dto.RankingPageResponse>> response = testRestTemplate.exchange(
+                RANKING_ENDPOINT, HttpMethod.GET, new HttpEntity<>(userAuthHeaders()), type
+            );
+
+            // assert
+            RankingV1Dto.RankingPageResponse body = response.getBody().data();
+            assertAll(
+                () -> assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK),
+                () -> assertThat(body.period()).isEqualTo("DAILY"),
+                () -> assertThat(body.date()).isNotNull(),
+                () -> assertThat(body.items()).hasSize(1),
+                () -> assertThat(body.items().get(0).productId()).isEqualTo(product.getId())
+            );
+        }
+
+        @DisplayName("지원하지 않는 period 값이면 400 BAD_REQUEST가 반환된다.")
+        @Test
+        void returnsBadRequest_whenPeriodIsInvalid() {
+            // act
+            ParameterizedTypeReference<ApiResponse<Void>> type = new ParameterizedTypeReference<>() {};
+            ResponseEntity<ApiResponse<Void>> response = testRestTemplate.exchange(
+                RANKING_ENDPOINT + "?period=YEARLY", HttpMethod.GET, new HttpEntity<>(userAuthHeaders()), type
             );
 
             // assert

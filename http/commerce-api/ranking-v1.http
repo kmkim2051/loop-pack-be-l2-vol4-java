@@ -26,6 +26,27 @@ X-Loopers-LoginPw: Password1!
 
 ---
 
+### 주간 랭킹 조회 (배치 MV 최신 스냅샷 — date 무시)
+GET {{commerce-api}}/api/v1/rankings?period=WEEKLY&size=20&page=1
+X-Loopers-LoginId: user123
+X-Loopers-LoginPw: Password1!
+
+---
+
+### 월간 랭킹 조회 (배치 MV 최신 스냅샷)
+GET {{commerce-api}}/api/v1/rankings?period=MONTHLY&size=20&page=1
+X-Loopers-LoginId: user123
+X-Loopers-LoginPw: Password1!
+
+---
+
+### 랭킹 Page 조회 — 잘못된 period 값 (400)
+GET {{commerce-api}}/api/v1/rankings?period=YEARLY
+X-Loopers-LoginId: user123
+X-Loopers-LoginPw: Password1!
+
+---
+
 ### 상품 상세 조회 — 오늘 랭킹 순위(rank) 포함, 순위에 없으면 null
 GET {{commerce-api}}/api/v1/products/1
 X-Loopers-LoginId: user123
