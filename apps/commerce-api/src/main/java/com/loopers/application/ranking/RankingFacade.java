@@ -20,7 +20,8 @@ import java.util.stream.Collectors;
 
 /**
  * 랭킹 조회 — 기간별 저장소에서 상품 ID 페이지를 얻은 뒤 상품정보를 Aggregation 한다.
- * DAILY는 Redis ZSET(일자별), WEEKLY/MONTHLY는 배치가 적재한 MV(최신 스냅샷)에서 조회하며, 이후 결합 로직은 공통이다.
+ * DAILY는 Redis ZSET(일자별), WEEKLY/MONTHLY는 배치가 적재한 MV(date로 해석한 스냅샷, 미지정 시 최신)에서 조회하며,
+ * 이후 결합 로직은 공통이다.
  */
 @RequiredArgsConstructor
 @Component
@@ -45,13 +46,20 @@ public class RankingFacade {
         long totalCount;
         LocalDate responseDate;
         if (period == RankingPeriod.DAILY) {
-            productIds = rankingRepository.findTopProductIds(date, offset, size);
-            totalCount = rankingRepository.countRanked(date);
-            responseDate = date;
+            LocalDate targetDate = date == null ? LocalDate.now() : date;
+            productIds = rankingRepository.findTopProductIds(targetDate, offset, size);
+            totalCount = rankingRepository.countRanked(targetDate);
+            responseDate = targetDate;
         } else {
-            productIds = periodRankingRepository.findTopProductIds(period, offset, size);
-            totalCount = periodRankingRepository.countRanked(period);
-            responseDate = null; // 최신 스냅샷 — 특정 날짜 개념 없음
+            // WEEKLY/MONTHLY: date를 포함하는 최신 스냅샷(date 없으면 최신)을 해석해 그 기간의 순위를 읽는다.
+            Optional<PeriodRankingRepository.ResolvedPeriod> window = periodRankingRepository.resolvePeriod(period, date);
+            if (window.isEmpty()) {
+                return new RankingPageInfo(period, null, page, size, 0L, List.of());
+            }
+            PeriodRankingRepository.ResolvedPeriod resolved = window.get();
+            productIds = periodRankingRepository.findTopProductIds(period, resolved, offset, size);
+            totalCount = periodRankingRepository.countRanked(period, resolved);
+            responseDate = resolved.periodEnd(); // 어느 스냅샷인지 알 수 있도록 기간 종료일을 응답 date로
         }
 
         Map<Long, ProductInfo> productById = productService.getAllByIds(productIds).stream()

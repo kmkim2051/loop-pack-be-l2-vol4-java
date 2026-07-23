@@ -149,22 +149,24 @@ class RankingFacadeTest {
     @Nested
     class GetRankingsByPeriod {
 
-        @DisplayName("WEEKLY는 MV 저장소에서 순위 순으로 조회하고 date 없이(최신 스냅샷) 상품정보를 결합한다.")
+        @DisplayName("WEEKLY는 date로 해석한 스냅샷 기간을 조회하고, 응답 date에 그 기간의 period_end를 채운다.")
         @Test
         void readsFromMvRepository_forWeekly() {
-            // arrange — 일간(Redis) 저장소는 건드리지 않고 MV 저장소에서 조회
-            given(periodRankingRepository.findTopProductIds(RankingPeriod.WEEKLY, 0, 20)).willReturn(List.of(5L, 6L));
-            given(periodRankingRepository.countRanked(RankingPeriod.WEEKLY)).willReturn(2L);
+            // arrange — 일간(Redis) 저장소는 건드리지 않고 MV 저장소에서 조회. date가 속한 스냅샷 기간이 해석된다.
+            var window = new PeriodRankingRepository.ResolvedPeriod(LocalDate.of(2026, 7, 9), LocalDate.of(2026, 7, 15));
+            given(periodRankingRepository.resolvePeriod(RankingPeriod.WEEKLY, DATE)).willReturn(Optional.of(window));
+            given(periodRankingRepository.findTopProductIds(RankingPeriod.WEEKLY, window, 0, 20)).willReturn(List.of(5L, 6L));
+            given(periodRankingRepository.countRanked(RankingPeriod.WEEKLY, window)).willReturn(2L);
             given(productService.getAllByIds(List.of(5L, 6L)))
                 .willReturn(List.of(productInfo(5L), productInfo(6L)));
 
-            // act — date를 넘겨도 WEEKLY는 무시(최신 스냅샷)
+            // act
             RankingPageInfo result = facade.getRankings(RankingPeriod.WEEKLY, DATE, 1, 20);
 
             // assert
             assertAll(
                 () -> assertThat(result.period()).isEqualTo(RankingPeriod.WEEKLY),
-                () -> assertThat(result.date()).isNull(),
+                () -> assertThat(result.date()).isEqualTo(window.periodEnd()),
                 () -> assertThat(result.totalCount()).isEqualTo(2),
                 () -> assertThat(result.items()).extracting(RankingPageInfo.RankedProduct::rank)
                     .containsExactly(1L, 2L),
@@ -173,20 +175,39 @@ class RankingFacadeTest {
             );
         }
 
-        @DisplayName("MONTHLY도 MV 저장소 경로로 동작하며, 랭킹판이 비면 빈 목록을 반환한다.")
+        @DisplayName("date 미지정 시 최신 스냅샷을 해석해 조회한다 (resolvePeriod에 null 전달).")
         @Test
-        void readsFromMvRepository_forMonthly_empty() {
-            // arrange
-            given(periodRankingRepository.findTopProductIds(RankingPeriod.MONTHLY, 0, 20)).willReturn(List.of());
-            given(periodRankingRepository.countRanked(RankingPeriod.MONTHLY)).willReturn(0L);
-            given(productService.getAllByIds(List.of())).willReturn(List.of());
+        void readsLatestSnapshot_whenDateIsNull() {
+            // arrange — date=null → 최신 스냅샷 해석
+            var window = new PeriodRankingRepository.ResolvedPeriod(LocalDate.of(2026, 7, 9), LocalDate.of(2026, 7, 15));
+            given(periodRankingRepository.resolvePeriod(RankingPeriod.WEEKLY, null)).willReturn(Optional.of(window));
+            given(periodRankingRepository.findTopProductIds(RankingPeriod.WEEKLY, window, 0, 20)).willReturn(List.of(5L));
+            given(periodRankingRepository.countRanked(RankingPeriod.WEEKLY, window)).willReturn(1L);
+            given(productService.getAllByIds(List.of(5L))).willReturn(List.of(productInfo(5L)));
+
+            // act
+            RankingPageInfo result = facade.getRankings(RankingPeriod.WEEKLY, null, 1, 20);
+
+            // assert
+            assertAll(
+                () -> assertThat(result.date()).isEqualTo(window.periodEnd()),
+                () -> assertThat(result.items()).extracting(item -> item.product().id()).containsExactly(5L)
+            );
+        }
+
+        @DisplayName("해당 기간 스냅샷이 없으면(해석 결과 없음) 빈 목록과 totalCount 0, date null을 반환한다.")
+        @Test
+        void returnsEmptyPage_whenNoSnapshotResolved() {
+            // arrange — MONTHLY 스냅샷 없음
+            given(periodRankingRepository.resolvePeriod(RankingPeriod.MONTHLY, DATE)).willReturn(Optional.empty());
 
             // act
             RankingPageInfo result = facade.getRankings(RankingPeriod.MONTHLY, DATE, 1, 20);
 
-            // assert
+            // assert — 저장소·상품조회를 더 부르지 않고 빈 페이지
             assertAll(
                 () -> assertThat(result.period()).isEqualTo(RankingPeriod.MONTHLY),
+                () -> assertThat(result.date()).isNull(),
                 () -> assertThat(result.items()).isEmpty(),
                 () -> assertThat(result.totalCount()).isZero()
             );

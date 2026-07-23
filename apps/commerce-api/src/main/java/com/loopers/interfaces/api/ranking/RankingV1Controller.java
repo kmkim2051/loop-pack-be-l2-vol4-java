@@ -29,7 +29,7 @@ public class RankingV1Controller {
     /**
      * 랭킹 Page 조회.
      * period 미지정 시 DAILY(하위호환). DAILY는 date로 대상 날짜 지정(미지정 시 오늘, TTL 2일이라 전일까지 조회 가능),
-     * WEEKLY/MONTHLY는 최신 스냅샷을 반환하므로 date는 무시된다.
+     * WEEKLY/MONTHLY는 date를 포함하는 스냅샷(미지정 시 최신)을 반환한다.
      */
     @GetMapping
     public ApiResponse<RankingV1Dto.RankingPageResponse> getRankings(
@@ -39,7 +39,7 @@ public class RankingV1Controller {
         @RequestParam(defaultValue = "20") int size
     ) {
         RankingPeriod rankingPeriod = parsePeriodOrDaily(period);
-        LocalDate targetDate = parseDateOrToday(date);
+        LocalDate targetDate = parseDateOrNull(date);
         return ApiResponse.success(
             RankingV1Dto.RankingPageResponse.from(rankingFacade.getRankings(rankingPeriod, targetDate, page, size))
         );
@@ -56,9 +56,10 @@ public class RankingV1Controller {
         }
     }
 
-    private LocalDate parseDateOrToday(String date) {
+    /** date 미지정 시 null(파사드가 DAILY는 오늘, WEEKLY/MONTHLY는 최신 스냅샷으로 처리). 형식 오류는 400. */
+    private LocalDate parseDateOrNull(String date) {
         if (date == null || date.isBlank()) {
-            return LocalDate.now();
+            return null;
         }
         try {
             return LocalDate.parse(date, DateTimeFormatter.BASIC_ISO_DATE);
