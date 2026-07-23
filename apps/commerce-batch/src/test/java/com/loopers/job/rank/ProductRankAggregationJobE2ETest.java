@@ -139,7 +139,7 @@ class ProductRankAggregationJobE2ETest {
         assertThat(monthly.get(0).getPeriodStart()).isEqualTo(BASE_DATE.minusDays(29));
     }
 
-    @DisplayName("재실행하면 이전 스냅샷을 비우고 새로 적재한다 (전체 교체 멱등).")
+    @DisplayName("같은 baseDate로 재실행하면 그 기간 스냅샷만 비우고 새로 적재한다 (기간별 교체 멱등).")
     @Test
     void replacesSnapshotOnRerun() throws Exception {
         // arrange & act — 1차 실행
@@ -162,5 +162,37 @@ class ProductRankAggregationJobE2ETest {
         List<WeeklyProductRankModel> weekly = weeklyRepository.findAll();
         assertThat(weekly).hasSize(2);
         assertThat(weekly).extracting(WeeklyProductRankModel::getProductId).containsExactlyInAnyOrder(2L, 3L);
+    }
+
+    @DisplayName("서로 다른 baseDate로 실행하면 각 기간 스냅샷이 함께 보존된다 (히스토리).")
+    @Test
+    void keepsHistoryAcrossDifferentBaseDates() throws Exception {
+        // arrange — 두 개의 겹치지 않는 주간 창에 각각 상품을 시드 (주 1회 실행 전제)
+        LocalDate priorBase = BASE_DATE.minusDays(7);         // 이전 주간 창 [BASE-13, BASE-7]
+        seed(1L, BASE_DATE, 0, 0, 10);                        // 최신 창 [BASE-6, BASE]
+        seed(2L, BASE_DATE.minusDays(10), 0, 0, 5);           // 이전 창 안 (BASE-10)
+        jobLauncherTestUtils.setJob(job);
+
+        // act — 이전 주 기준일로 1회, 최신 기준일로 1회 (전체 삭제가 아니라 각 기간만 교체)
+        jobLauncherTestUtils.launchJob(
+            new JobParametersBuilder(jobLauncherTestUtils.getUniqueJobParameters()).addString("baseDate", priorBase.toString()).toJobParameters()
+        );
+        jobLauncherTestUtils.launchJob(
+            new JobParametersBuilder(jobLauncherTestUtils.getUniqueJobParameters()).addString("baseDate", BASE_DATE.toString()).toJobParameters()
+        );
+
+        // assert — 두 기간 스냅샷이 공존하고, 각 창의 상품이 해당 기간에 적재된다
+        List<WeeklyProductRankModel> weekly = weeklyRepository.findAll().stream()
+            .sorted(Comparator.comparing(ProductRankSnapshotModel::getPeriodEnd))
+            .toList();
+        assertThat(weekly).hasSize(2);
+
+        assertThat(weekly.get(0).getPeriodStart()).isEqualTo(priorBase.minusDays(6));
+        assertThat(weekly.get(0).getPeriodEnd()).isEqualTo(priorBase);
+        assertThat(weekly.get(0).getProductId()).isEqualTo(2L);
+
+        assertThat(weekly.get(1).getPeriodStart()).isEqualTo(BASE_DATE.minusDays(6));
+        assertThat(weekly.get(1).getPeriodEnd()).isEqualTo(BASE_DATE);
+        assertThat(weekly.get(1).getProductId()).isEqualTo(1L);
     }
 }

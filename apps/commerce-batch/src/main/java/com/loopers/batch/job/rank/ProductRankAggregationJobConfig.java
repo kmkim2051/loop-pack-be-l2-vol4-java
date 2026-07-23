@@ -35,8 +35,9 @@ import java.time.format.DateTimeParseException;
 /**
  * 주간·월간 랭킹 집계 Job — 일간 롤업(product_metrics_daily)을 기간 집계해 MV 두 테이블에 TOP 100을 적재한다.
  *
- * <p>구성: 각 기간마다 (clear → chunk-aggregate) 두 스텝. clear가 기존 스냅샷을 비우고, chunk 스텝이
- * 가중 점수 내림차순 TOP 100을 순위와 함께 새로 적재한다 — 재실행 멱등(전체 교체).
+ * <p>구성: 각 기간마다 (clear → chunk-aggregate) 두 스텝. clear가 <b>해당 기간</b> 스냅샷만 비우고(과거 기간은
+ * 보존 — 히스토리), chunk 스텝이 가중 점수 내림차순 TOP 100을 순위와 함께 새로 적재한다 — 같은 baseDate
+ * 재실행 시 그 기간만 교체하는 멱등.
  *
  * <p>파라미터: {@code baseDate}(yyyy-MM-dd, 미지정 시 어제). 주간=[baseDate-6, baseDate], 월간=[baseDate-29, baseDate].
  * 오늘의 일간 롤업은 아직 누적 중이라 기본 기준일을 어제로 둔다.
@@ -95,7 +96,8 @@ public class ProductRankAggregationJobConfig {
     public Step weeklyClearStep() {
         return new StepBuilder("weeklyClearStep", jobRepository)
             .tasklet((contribution, chunkContext) -> {
-                weeklyRepository.deleteAllInBatch();
+                LocalDate end = resolveBaseDate(baseDateParam(chunkContext));
+                weeklyRepository.deleteByPeriod(end.minusDays(WEEKLY_DAYS - 1), end);
                 return RepeatStatus.FINISHED;
             }, transactionManager)
             .listener(stepMonitorListener)
@@ -138,7 +140,8 @@ public class ProductRankAggregationJobConfig {
     public Step monthlyClearStep() {
         return new StepBuilder("monthlyClearStep", jobRepository)
             .tasklet((contribution, chunkContext) -> {
-                monthlyRepository.deleteAllInBatch();
+                LocalDate end = resolveBaseDate(baseDateParam(chunkContext));
+                monthlyRepository.deleteByPeriod(end.minusDays(MONTHLY_DAYS - 1), end);
                 return RepeatStatus.FINISHED;
             }, transactionManager)
             .listener(stepMonitorListener)
@@ -202,6 +205,12 @@ public class ProductRankAggregationJobConfig {
                 rs.getLong("salesSum")
             ))
             .build();
+    }
+
+    /** clear 스텝에서 JobParameter {@code baseDate}(String)를 읽는다 — 리더/프로세서와 동일 기간 창을 계산하기 위함. */
+    private String baseDateParam(org.springframework.batch.core.scope.context.ChunkContext chunkContext) {
+        Object value = chunkContext.getStepContext().getJobParameters().get("baseDate");
+        return value == null ? null : value.toString();
     }
 
     private LocalDate resolveBaseDate(String baseDate) {
